@@ -12,8 +12,9 @@ from trl import SFTTrainer
 
 SYSTEM_PROMPT = (
     "你是电商领域的问题意图识别模型。\n"
-    "只输出严格 JSON，且必须符合 schema："
-    "{\"labels\":[{\"level1\":\"...\",\"level2\":\"...\"}]}"
+    "只输出严格 JSON，且必须符合以下结构：\n"
+    "{\"labels\":[{\"level1\":\"意图一级名称\",\"level2\":\"意图二级名称\"}]}\n"
+    "注意：不要输出省略号或占位符，必须输出真实意图名称。"
 )
 
 USER_TEMPLATE = "用户问题：{text}\n请输出意图JSON。"

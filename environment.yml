@@ -14,8 +14,9 @@ dependencies:
       - unsloth
       - transformers
       - datasets
-      - trl
+      - trl<0.10
       - peft
       - accelerate
       - bitsandbytes
+      - rich
       - lm-format-enforcer
