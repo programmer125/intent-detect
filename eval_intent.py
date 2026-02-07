@@ -8,11 +8,12 @@ import unsloth  # must be imported before trl/transformers/peft for patches
 from unsloth import FastLanguageModel
 
 
-SYSTEM_PROMPT = (
+SYSTEM_PROMPT_BASE = (
     "你是电商领域的问题意图识别模型。\n"
     "只输出严格 JSON，且必须符合以下结构：\n"
     "{\"labels\":[{\"level1\":\"意图一级名称\",\"level2\":\"意图二级名称\"}]}\n"
-    "注意：不要输出省略号或占位符，必须输出真实意图名称。"
+    "注意：不要输出省略号或占位符，必须输出真实意图名称。\n"
+    "意图只能从给定列表中选择。"
 )
 
 USER_TEMPLATE = "用户问题：{text}\n请输出意图JSON。"
@@ -25,6 +26,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--output-jsonl", default="eval_results.jsonl")
     p.add_argument("--schema-path", default="schema_intent.json")
     p.add_argument("--regex-path", default="regex_intent.txt")
+    p.add_argument("--intent-map", default="intent_id_map.json")
     p.add_argument("--max-seq-len", type=int, default=512)
     p.add_argument("--max-new-tokens", type=int, default=256)
     p.add_argument("--no-constrained", action="store_true", help="Disable schema constrained decoding.")
@@ -157,6 +159,7 @@ def main():
 
     regex = load_regex(args.regex_path)
     schema = load_schema(args.schema_path)
+    system_prompt = build_system_prompt(args.intent_map)
 
     y_true = []
     y_pred = []
@@ -164,7 +167,7 @@ def main():
     with open(args.output_jsonl, "w", encoding="utf-8") as fout:
         for r in rows:
             messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": USER_TEMPLATE.format(text=r["text"])},
             ]
             prompt = tokenizer.apply_chat_template(
@@ -210,3 +213,26 @@ def main():
 
 if __name__ == "__main__":
     main()
+def load_intent_list(path: str) -> Tuple[List[str], List[str]]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    level1 = list(data.get("level1", {}).keys())
+    level2 = []
+    for k in data.get("level2", {}).keys():
+        parts = k.split("/", 1)
+        if len(parts) == 2:
+            level2.append(k)
+    return level1, level2
+
+
+def build_system_prompt(intent_map_path: str) -> str:
+    level1, level2 = load_intent_list(intent_map_path)
+    l1 = "；".join(level1)
+    l2 = "；".join(level2)
+    return (
+        SYSTEM_PROMPT_BASE
+        + "\n一级意图列表："
+        + l1
+        + "\n二级意图列表（格式：一级/二级）："
+        + l2
+    )

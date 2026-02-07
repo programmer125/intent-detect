@@ -1,37 +1,70 @@
+import argparse
 import json
 import os
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 from unsloth import FastLanguageModel
 
-MODEL_DIR = os.environ.get("MODEL_DIR", "output/qwen2p5_intent_qlora")
-MAX_SEQ_LEN = int(os.environ.get("MAX_SEQ_LEN", "512"))
-SCHEMA_PATH = os.environ.get("SCHEMA_PATH", "schema_intent.json")
-REGEX_PATH = os.environ.get("REGEX_PATH", "regex_intent.txt")
-
-SYSTEM_PROMPT = (
+SYSTEM_PROMPT_BASE = (
     "你是电商领域的问题意图识别模型。\n"
     "只输出严格 JSON，且必须符合以下结构：\n"
     "{\"labels\":[{\"level1\":\"意图一级名称\",\"level2\":\"意图二级名称\"}]}\n"
-    "注意：不要输出省略号或占位符，必须输出真实意图名称。"
+    "注意：不要输出省略号或占位符，必须输出真实意图名称。\n"
+    "意图只能从给定列表中选择。"
 )
 
 USER_TEMPLATE = "用户问题：{text}\n请输出意图JSON。"
 
 
-def load_regex() -> re.Pattern:
-    with open(REGEX_PATH, "r", encoding="utf-8") as f:
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Inference for intent model with JSON outputs.")
+    p.add_argument("--model-dir", default=os.environ.get("MODEL_DIR", "output/qwen2p5_intent_qlora"))
+    p.add_argument("--max-seq-len", type=int, default=int(os.environ.get("MAX_SEQ_LEN", "512")))
+    p.add_argument("--schema-path", default=os.environ.get("SCHEMA_PATH", "schema_intent.json"))
+    p.add_argument("--regex-path", default=os.environ.get("REGEX_PATH", "regex_intent.txt"))
+    p.add_argument("--intent-map", default="intent_id_map.json")
+    p.add_argument("--text", default="快递用哪家？下单后多久发货？")
+    return p
+
+
+def load_regex(path: str) -> re.Pattern:
+    with open(path, "r", encoding="utf-8") as f:
         pattern = f.read().strip()
     return re.compile(pattern, re.DOTALL)
 
 
-def load_schema() -> Dict[str, Any]:
-    with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
+def load_schema(path: str) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def try_constrained_decode(model, tokenizer, prompt: str):
+def load_intent_list(path: str) -> Tuple[List[str], List[str]]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    level1 = list(data.get("level1", {}).keys())
+    level2 = []
+    for k in data.get("level2", {}).keys():
+        parts = k.split("/", 1)
+        if len(parts) == 2:
+            level2.append(k)
+    return level1, level2
+
+
+def build_system_prompt(intent_map_path: str) -> str:
+    level1, level2 = load_intent_list(intent_map_path)
+    l1 = "；".join(level1)
+    l2 = "；".join(level2)
+    return (
+        SYSTEM_PROMPT_BASE
+        + "\n一级意图列表："
+        + l1
+        + "\n二级意图列表（格式：一级/二级）："
+        + l2
+    )
+
+
+def try_constrained_decode(model, tokenizer, prompt: str, schema: Dict[str, Any]):
     """
     Optional: If lm-format-enforcer is installed, use it for schema-based decoding.
     Otherwise return None to fall back.
@@ -44,7 +77,6 @@ def try_constrained_decode(model, tokenizer, prompt: str):
     except Exception:
         return None
 
-    schema = load_schema()
     parser = JsonSchemaParser(schema)
     prefix_fn = build_transformers_prefix_allowed_tokens_fn(tokenizer, parser)
 
@@ -86,26 +118,28 @@ def validate_json(s: str, regex: re.Pattern) -> bool:
     return bool(regex.match(s))
 
 
-def infer(text: str):
+def infer(args):
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=MODEL_DIR,
-        max_seq_length=MAX_SEQ_LEN,
+        model_name=args.model_dir,
+        max_seq_length=args.max_seq_len,
         load_in_4bit=True,
     )
     FastLanguageModel.for_inference(model)
 
+    system_prompt = build_system_prompt(args.intent_map)
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": USER_TEMPLATE.format(text=text)},
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": USER_TEMPLATE.format(text=args.text)},
     ]
     prompt = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
 
-    regex = load_regex()
+    regex = load_regex(args.regex_path)
+    schema = load_schema(args.schema_path)
 
     # 1) try constrained decode (if available)
-    out = try_constrained_decode(model, tokenizer, prompt)
+    out = try_constrained_decode(model, tokenizer, prompt, schema)
     if out is None:
         out = normal_generate(model, tokenizer, prompt)
 
@@ -120,7 +154,7 @@ def infer(text: str):
             "role": "user",
             "content": (
                 "你刚才输出的JSON不合法。请只输出合法JSON，不要任何解释。\n"
-                f"用户问题：{text}"
+                f"用户问题：{args.text}"
             ),
         },
     ]
@@ -137,5 +171,5 @@ def infer(text: str):
 
 
 if __name__ == "__main__":
-    # quick manual test
-    print(infer("快递用哪家？下单后多久发货？"))
+    args = build_arg_parser().parse_args()
+    print(infer(args))

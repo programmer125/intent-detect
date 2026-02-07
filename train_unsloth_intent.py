@@ -1,7 +1,7 @@
 import argparse
 import inspect
 import json
-from typing import List
+from typing import List, Tuple
 
 import unsloth  # must be imported before trl/transformers/peft for patches
 from unsloth import FastLanguageModel
@@ -10,11 +10,12 @@ from datasets import Dataset
 from transformers import TrainingArguments
 from trl import SFTTrainer
 
-SYSTEM_PROMPT = (
+SYSTEM_PROMPT_BASE = (
     "你是电商领域的问题意图识别模型。\n"
     "只输出严格 JSON，且必须符合以下结构：\n"
     "{\"labels\":[{\"level1\":\"意图一级名称\",\"level2\":\"意图二级名称\"}]}\n"
-    "注意：不要输出省略号或占位符，必须输出真实意图名称。"
+    "注意：不要输出省略号或占位符，必须输出真实意图名称。\n"
+    "意图只能从给定列表中选择。"
 )
 
 USER_TEMPLATE = "用户问题：{text}\n请输出意图JSON。"
@@ -37,6 +38,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--save-steps", type=int, default=200)
     p.add_argument("--save-total-limit", type=int, default=2)
     p.add_argument("--lora-dropout", type=float, default=0.0)
+    p.add_argument("--intent-map", default="intent_id_map.json")
     return p
 
 # --------- Data ---------
@@ -46,11 +48,37 @@ def load_jsonl(path: str) -> List[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
-def build_dataset(tokenizer, rows: List[dict]) -> Dataset:
+def load_intent_list(path: str) -> Tuple[List[str], List[str]]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    level1 = list(data.get("level1", {}).keys())
+    level2 = []
+    for k in data.get("level2", {}).keys():
+        # key format: "level1/level2"
+        parts = k.split("/", 1)
+        if len(parts) == 2:
+            level2.append(k)
+    return level1, level2
+
+
+def build_system_prompt(intent_map_path: str) -> str:
+    level1, level2 = load_intent_list(intent_map_path)
+    l1 = "；".join(level1)
+    l2 = "；".join(level2)
+    return (
+        SYSTEM_PROMPT_BASE
+        + "\n一级意图列表："
+        + l1
+        + "\n二级意图列表（格式：一级/二级）："
+        + l2
+    )
+
+
+def build_dataset(tokenizer, rows: List[dict], system_prompt: str) -> Dataset:
     data = []
     for r in rows:
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": USER_TEMPLATE.format(text=r["text"])},
         ]
         prompt = tokenizer.apply_chat_template(
@@ -94,8 +122,9 @@ def main():
     train_rows = load_jsonl(args.train_jsonl)
     val_rows = load_jsonl(args.val_jsonl)
 
-    train_ds = build_dataset(tokenizer, train_rows)
-    val_ds = build_dataset(tokenizer, val_rows)
+    system_prompt = build_system_prompt(args.intent_map)
+    train_ds = build_dataset(tokenizer, train_rows, system_prompt)
+    val_ds = build_dataset(tokenizer, val_rows, system_prompt)
 
     ta_kwargs = dict(
         output_dir=args.output_dir,
