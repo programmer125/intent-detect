@@ -1,0 +1,21 @@
+name: unsloth-qlora
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=11.8
+  - pip:
+      - unsloth
+      - transformers
+      - datasets
+      - trl
+      - peft
+      - accelerate
+      - bitsandbytes
+      - lm-format-enforcer
