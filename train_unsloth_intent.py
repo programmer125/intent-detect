@@ -1,4 +1,5 @@
 import argparse
+import inspect
 import json
 from typing import List
 
@@ -34,6 +35,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--eval-steps", type=int, default=200)
     p.add_argument("--save-steps", type=int, default=200)
     p.add_argument("--save-total-limit", type=int, default=2)
+    p.add_argument("--lora-dropout", type=float, default=0.0)
     return p
 
 # --------- Data ---------
@@ -82,7 +84,7 @@ def main():
             "down_proj",
         ],
         lora_alpha=32,
-        lora_dropout=0.05,
+        lora_dropout=args.lora_dropout,
         bias="none",
         use_gradient_checkpointing=True,
         random_state=42,
@@ -94,7 +96,7 @@ def main():
     train_ds = build_dataset(tokenizer, train_rows)
     val_ds = build_dataset(tokenizer, val_rows)
 
-    args = TrainingArguments(
+    ta_kwargs = dict(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
@@ -111,6 +113,10 @@ def main():
         lr_scheduler_type="cosine",
         report_to="none",
     )
+    sig = inspect.signature(TrainingArguments.__init__)
+    if "evaluation_strategy" not in sig.parameters and "eval_strategy" in sig.parameters:
+        ta_kwargs["eval_strategy"] = ta_kwargs.pop("evaluation_strategy")
+    train_args = TrainingArguments(**ta_kwargs)
 
     trainer = SFTTrainer(
         model=model,
@@ -120,7 +126,7 @@ def main():
         dataset_text_field="text",
         max_seq_length=args.max_seq_len,
         packing=False,
-        args=args,
+        args=train_args,
     )
 
     trainer.train()
