@@ -2,11 +2,12 @@ import argparse
 import json
 from typing import List
 
+import unsloth  # must be imported before trl/transformers/peft for patches
+from unsloth import FastLanguageModel
+
 from datasets import Dataset
 from transformers import TrainingArguments
 from trl import SFTTrainer
-
-from unsloth import FastLanguageModel
 
 SYSTEM_PROMPT = (
     "你是电商领域的问题意图识别模型。\n"
